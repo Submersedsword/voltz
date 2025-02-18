@@ -1,16 +1,9 @@
-
 -- Register Wire as a Craft Item
 minetest.register_craftitem("voltz:wire", {
     description = "Electric Wire",
     inventory_image = "wire.obj",
-    groups = {energy_cable = 1}  -- Ensures it appears in searches and works universally
+    groups = {energy_cable = 1}  -- Ensures it appears in searches
 })
-
--- Define electricity properties
-local electricity = {
-    max_capacity = 100,  -- Max voltage storage
-    generation_rate = 10,  -- Power generated per second
-}
 
 -- Define wire types and their power loss rates
 voltz.wire_types = {
@@ -19,109 +12,130 @@ voltz.wire_types = {
     ["voltz:wire_high"] = { loss = 5 },   -- More efficient
 }
 
+-- Function to check if a node is a power source
+local function is_power_source(pos)
+    local node = minetest.get_node(pos).name
+    return minetest.get_item_group(node, "energy_source") > 0
+end
+
 -- Function to check if a node is a valid wire
 local function is_wire(pos)
     local node = minetest.get_node(pos)
     return voltz.wire_types[node.name] ~= nil
 end
 
--- Function to spread power through connected wires
-local function spread_power(pos, power_level)
+-- Function to find the nearest power source and transmit power
+local function find_and_transmit_power(pos, visited)
+    if not visited then visited = {} end  -- Track visited nodes
+    local pos_hash = minetest.pos_to_string(pos)
+    if visited[pos_hash] then return 0 end  -- Prevent infinite loops
+    visited[pos_hash] = true
+
+    local max_power = 0
+    local power_source_found = false
+
     local positions = {
-        {x = pos.x + 1, y = pos.y, z = pos.z},  -- Right
-        {x = pos.x - 1, y = pos.y, z = pos.z},  -- Left
-        {x = pos.x, y = pos.y, z = pos.z + 1},  -- Front
-        {x = pos.x, y = pos.y, z = pos.z - 1},  -- Back
+        {x = pos.x + 1, y = pos.y, z = pos.z}, {x = pos.x - 1, y = pos.y, z = pos.z},
+        {x = pos.x, y = pos.y, z = pos.z + 1}, {x = pos.x, y = pos.y, z = pos.z - 1},
+        {x = pos.x, y = pos.y + 1, z = pos.z}, {x = pos.x, y = pos.y - 1, z = pos.z}
     }
 
+    -- Check for power sources
     for _, neighbor_pos in ipairs(positions) do
-        local node = minetest.get_node(neighbor_pos)
-        local wire_info = voltz.wire_types[node.name]
-
-        if wire_info then
+        if is_power_source(neighbor_pos) then
             local meta = minetest.get_meta(neighbor_pos)
-            local current_power = meta:get_int("power") or 0
-            if current_power < power_level then
-                meta:set_int("power", power_level)
-                spread_power(neighbor_pos, power_level - wire_info.loss)  -- Power weakens based on wire type
-            end
-        elseif minetest.registered_nodes[node.name] and minetest.registered_nodes[node.name].groups.energy_device then
-            -- If a connected node is an energy-consuming device, send power to it
-            local meta = minetest.get_meta(neighbor_pos)
-            meta:set_int("power", power_level)
+            local power = meta:get_int("power") or 0
+            max_power = math.max(max_power, power)
+            power_source_found = true
         end
     end
+
+    -- If connected to a power source, spread power through wires
+    if power_source_found then
+        for _, neighbor_pos in ipairs(positions) do
+            local node = minetest.get_node(neighbor_pos)
+            local wire_info = voltz.wire_types[node.name]
+
+            if wire_info then
+                local meta = minetest.get_meta(neighbor_pos)
+                local adjusted_power = math.max(max_power - wire_info.loss, 0)
+
+                -- Set wire power and continue spreading
+                meta:set_int("power", adjusted_power)
+                find_and_transmit_power(neighbor_pos, visited)
+            end
+        end
+    end
+
+    return max_power
 end
 
--- Function to generate power in the voltbox
-local function generate_power(pos)
+-- Function to update wire power levels
+local function update_wire_power(pos)
     local meta = minetest.get_meta(pos)
-    local stored_power = meta:get_int("power") or 0
-    stored_power = math.min(stored_power + electricity.generation_rate, electricity.max_capacity)
-    meta:set_int("power", stored_power)
-    spread_power(pos, stored_power)
-    minetest.after(1, generate_power, pos)  -- Schedule next power generation
+    local power = find_and_transmit_power(pos)
+
+    -- If power is found, store it in the wire
+    meta:set_int("power", power)
+
+    -- Debugging: Log power levels in console
+    minetest.log("action", "[Voltz] Wire at " .. minetest.pos_to_string(pos) .. " updated power: " .. power)
 end
 
--- Register Standard Wire (Works Universally)
+-- Register Standard Wire
 minetest.register_node("voltz:wire", {
     description = "Electric Wire",
     drawtype = "mesh",
     mesh = "wire.obj",
     tiles = {"wire.png"},
-    groups = {cracky = 2, oddly_breakable_by_hand = 1, energy_cable = 1},  -- Universal electricity cable
-
-    -- Initialize power when placed
+    groups = {cracky = 2, oddly_breakable_by_hand = 1, energy_cable = 1},
     on_construct = function(pos)
         local meta = minetest.get_meta(pos)
         meta:set_int("power", 0)
     end,
-
-    -- Spread power when placed near energy sources
     after_place_node = function(pos, placer, itemstack, pointed_thing)
-        spread_power(pos, 90)
-    end,
+        minetest.after(0.1, function() update_wire_power(pos) end)  -- Ensure power updates
+    end
 })
 
--- Register Low Voltage Wire (Loses More Power)
+-- Register Low Voltage Wire
 minetest.register_node("voltz:wire_low", {
     description = "Low Voltage Wire",
+    drawtype = "mesh",
+    mesh = "wire.obj",
     tiles = {"wire_low.png"},
     groups = {cracky = 2, oddly_breakable_by_hand = 1, energy_cable = 1},
-
-    -- Initialize power when placed
     on_construct = function(pos)
         local meta = minetest.get_meta(pos)
         meta:set_int("power", 0)
     end,
-})
-    -- Spread power when placed
     after_place_node = function(pos, placer, itemstack, pointed_thing)
-        spread_power(pos, 90)
-    end,
+        minetest.after(0.1, function() update_wire_power(pos) end)
+    end
+})
 
--- Register High Voltage Wire (Efficient Power Transfer)
-minetest.register_node("voltz:wire_high",{
+-- Register High Voltage Wire
+minetest.register_node("voltz:wire_high", {
     description = "High Voltage Wire",
+    drawtype = "mesh",
+    mesh = "wire.obj",
     tiles = {"wire_high.png"},
     groups = {cracky = 2, oddly_breakable_by_hand = 1, energy_cable = 1},
-
-    -- Initialize power when placed
     on_construct = function(pos)
         local meta = minetest.get_meta(pos)
         meta:set_int("power", 0)
-
-    -- Spread power when placed
+    end,
     after_place_node = function(pos, placer, itemstack, pointed_thing)
-        spread_power(pos, 90)
+        minetest.after(0.1, function() update_wire_power(pos) end)
     end
-end
 })
--- Make Wires Work with Any Luanti Energy Mod
-minetest.register_on_mods_loaded(function()
-    for name, def in pairs(minetest.registered_nodes) do
-        if def.groups and def.groups.energy_device then
-            voltz.wire_types[name] = { loss = 10 }  -- Automatically register any energy-consuming device
-        end
+
+-- ABM to Maintain Power Flow
+minetest.register_abm({
+    nodenames = {"voltz:wire", "voltz:wire_low", "voltz:wire_high"},
+    interval = 1,  -- Runs every second
+    chance = 1,
+    action = function(pos, node)
+        update_wire_power(pos)  -- Refresh wire power dynamically
     end
-end)
+})

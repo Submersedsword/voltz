@@ -2,7 +2,8 @@ local electricity = {
     voltz = 0,  -- Default energy state
     capacity = 100,  -- Maximum storage capacity
     generation_rate = 10,  -- Energy produced per tick
-    loss_rate = 5  -- Power loss per wire connection
+    loss_rate = 5,  -- Power loss per wire connection
+    heat_loss = 2  -- Power loss per connected machine (e.g., lamps, furnaces)
 }
 
 -- Function to generate electricity (e.g., power plants, solar panels)
@@ -20,31 +21,44 @@ function electricity.consume(amount)
     end
 end
 
--- Function to check if a position has a wire
+-- Function to check if a node is a wire
 local function is_wire(pos)
-    local node = core.get_node(pos)
-    return node.name == "voltz:wire_low" or node.name == "voltz:wire_high"
+    local node = minetest.get_node(pos)
+    return voltz.wire_types[node.name] ~= nil  -- Checks all registered wire types
 end
 
 -- Function to spread power through connected wires
-local function spread_power(pos, power_level)
+local function spread_power(pos, power_level, visited)
     if power_level <= 0 then return end  -- Stop spreading if no power left
+    if not visited then visited = {} end  -- Track visited nodes
+    local pos_hash = minetest.pos_to_string(pos)
+    if visited[pos_hash] then return end  -- Prevent infinite recursion
+    visited[pos_hash] = true
 
     local positions = {
-        {x = pos.x + 1, y = pos.y, z = pos.z},  -- Right
-        {x = pos.x - 1, y = pos.y, z = pos.z},  -- Left
-        {x = pos.x, y = pos.y, z = pos.z + 1},  -- Front
-        {x = pos.x, y = pos.y, z = pos.z - 1},  -- Back
+        {x = pos.x + 1, y = pos.y, z = pos.z}, {x = pos.x - 1, y = pos.y, z = pos.z},
+        {x = pos.x, y = pos.y, z = pos.z + 1}, {x = pos.x, y = pos.y, z = pos.z - 1},
+        {x = pos.x, y = pos.y + 1, z = pos.z}, {x = pos.x, y = pos.y - 1, z = pos.z}
     }
 
     for _, neighbor_pos in ipairs(positions) do
-        if is_wire(neighbor_pos) then
-            local meta = core.get_meta(neighbor_pos)
+        local node = minetest.get_node(neighbor_pos)
+        local wire_info = voltz.wire_types[node.name]
+
+        if wire_info then
+            local meta = minetest.get_meta(neighbor_pos)
             local current_power = meta:get_int("power") or 0
-            if current_power < power_level then
-                meta:set_int("power", power_level)
-                spread_power(neighbor_pos, power_level - electricity.loss_rate)  -- Reduce power as it spreads
+            local new_power = math.max(power_level - wire_info.loss, 0)  -- Apply wire loss
+
+            if new_power > current_power then
+                meta:set_int("power", new_power)
+                spread_power(neighbor_pos, new_power, visited)  -- Continue spreading power
             end
+        elseif minetest.get_item_group(node.name, "energy_device") > 0 then
+            -- If a connected node is an energy-consuming device, apply heat loss
+            local meta = minetest.get_meta(neighbor_pos)
+            local device_power = math.max(power_level - electricity.heat_loss, 0)
+            meta:set_int("power", device_power)
         end
     end
 end
@@ -57,6 +71,43 @@ end
 
 -- Start the electricity update loop
 minetest.after(1, update_electricity)
+
+-- ABM to Maintain Power Flow
+minetest.register_abm({
+    nodenames = {"voltz:wire", "voltz:wire_low", "voltz:wire_high"},
+    interval = 1,  -- Runs every second
+    chance = 1,
+    action = function(pos, node)
+        local meta = minetest.get_meta(pos)
+        local power = meta:get_int("power") or 0
+
+        -- Debugging: Log wire power levels
+        minetest.log("action", "[Voltz] Wire at " .. minetest.pos_to_string(pos) .. " has power: " .. power)
+
+        -- Recalculate and spread power properly
+        spread_power(pos, power)
+    end
+})
+
+-- ABM for Electric Furnaces & Lamps
+minetest.register_abm({
+    nodenames = {"voltz:lamp_off", "voltz:lamp_dim", "voltz:lamp_bright", "voltz:electric_furnace"},
+    interval = 1,
+    chance = 1,
+    action = function(pos, node)
+        local meta = minetest.get_meta(pos)
+        local power = meta:get_int("power") or 0
+
+        -- Debugging: Log power level of devices
+        minetest.log("action", "[Voltz] Device at " .. minetest.pos_to_string(pos) .. " has power: " .. power)
+
+        -- Reduce power based on heat loss
+        if power > 0 then
+            local new_power = math.max(power - electricity.heat_loss, 0)
+            meta:set_int("power", new_power)
+        end
+    end
+})
 
 -- Function to get electricity formspec
 function minetest.get_formspec()
@@ -72,5 +123,3 @@ function minetest.get_formspec()
 end
 
 return electricity  -- Export the electricity system for other mod files.
-
-

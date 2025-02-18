@@ -1,124 +1,138 @@
 -- Register Lamp as a Craft Item
-minetest.register_craftitem("voltz:lamp", {
+minetest.register_craftitem("voltz:lamp_off", {
     description = "Electric Lamp",
-    inventory_image = "lamp.png",
+    drawtype = "mesh",
+    mesh = "lamp.obj",
+    inventory_image = "lamp_off.png",
     groups = {energy_device = 1}  -- Ensures compatibility with other mods
 })
 
--- Function to check if there's a wire block adjacent to the lamp
-local function is_wire_adjacent(pos)
-    local directions = {
-        {x = 1, y = 0, z = 0},  {x = -1, y = 0, z = 0},  -- Left/Right
-        {x = 0, y = 0, z = 1},  {x = 0, y = 0, z = -1},  -- Front/Back
-        {x = 0, y = 1, z = 0},  {x = 0, y = -1, z = 0}   -- Above/Below
-    }
-    
-    for _, dir in ipairs(directions) do
-        local neighbor_pos = vector.add(pos, dir)
-        local neighbor_node = minetest.get_node(neighbor_pos).name
-        if minetest.get_item_group(neighbor_node, "wire") > 0 then
-            return true
-        end
-    end
-
-    return false
-end
-
--- Function to update lamp brightness dynamically
+-- Function to get power from the nearest wire and adjust brightness accordingly
 local function get_adjacent_power(pos)
     local directions = {
-        {x = 1, y = 0, z = 0}, {x = -1, y = 0, z = 0},  -- Left/Right
-        {x = 0, y = 0, z = 1}, {x = 0, y = 0, z = -1},  -- Front/Back
-        {x = 0, y = 1, z = 0}, {x = 0, y = -1, z = 0}   -- Above/Below
+        {x = 1, y = 0, z = 0}, {x = -1, y = 0, z = 0},
+        {x = 0, y = 0, z = 1}, {x = 0, y = 0, z = -1},
+        {x = 0, y = 1, z = 0}, {x = 0, y = -1, z = 0}
     }
+
     local max_power = 0
+    local wire_type_loss = nil  -- Store the type of wire connected
 
     for _, dir in ipairs(directions) do
         local neighbor_pos = vector.add(pos, dir)
         local neighbor_node = minetest.get_node(neighbor_pos).name
+
+        -- Check if it's a wire
         if minetest.get_item_group(neighbor_node, "energy_cable") > 0 then
             local meta = minetest.get_meta(neighbor_pos)
             local power = meta:get_int("power") or 0
-            if power > max_power then
-                max_power = power
+
+            -- Check the wire type and apply its loss
+            local wire_info = voltz.wire_types[neighbor_node]
+            if wire_info then
+                local adjusted_power = power - wire_info.loss  -- Adjust power based on wire loss
+
+                -- Ensure power never goes negative
+                adjusted_power = math.max(adjusted_power, 0)
+
+                -- Store the wire type loss (for debugging)
+                wire_type_loss = wire_info.loss
+
+                -- Track the highest adjusted power
+                max_power = math.max(max_power, adjusted_power)
             end
         end
     end
+
+    -- Debugging: Show detected power and wire loss in logs
+    minetest.log("action", "[Voltz] Lamp at " .. minetest.pos_to_string(pos) ..
+        " detecting power: " .. max_power .. " (Wire Loss: " .. tostring(wire_type_loss) .. ")")
+
     return max_power
 end
 
+-- Function to update lamp brightness based on power
 local function update_lamp_brightness(pos)
-    local node = minetest.get_node(pos)
     local meta = minetest.get_meta(pos)
-    local power = get_adjacent_power(pos)  -- Get power from connected wires
+    local power = get_adjacent_power(pos)
 
-    -- Only light up if there's a wire nearby with power
-    if not is_wire_adjacent(pos) or power <= 0 then
-        minetest.swap_node(pos, {name = "voltz:lamp_off"})
-        return
-    end
+    if power > 0 then
+        local light_level = math.min(math.floor(power / 10), 14)
+        meta:set_int("light_level", light_level)
 
-    local light_level = math.min(math.floor(power / 10), 14)
-    meta:set_int("light_level", light_level)
-
-    if power >= 10 then
-        minetest.swap_node(pos, {name = "voltz:lamp_bright", param1 = light_level})
-    elseif power >= 5 then
-        minetest.swap_node(pos, {name = "voltz:lamp_dim", param1 = light_level})
+        if power >= 10 then
+            minetest.swap_node(pos, {name = "voltz:lamp_bright"})
+        elseif power >= 5 then
+            minetest.swap_node(pos, {name = "voltz:lamp_dim"})
+        else
+            minetest.swap_node(pos, {name = "voltz:lamp_off"})
+        end
     else
-        minetest.swap_node(pos, {name = "voltz:lamp_off", param1 = 0})
+        minetest.swap_node(pos, {name = "voltz:lamp_off"})
     end
 end
 
--- Automatically Adjust Brightness When Power is Updated
+-- Run update when lamp is placed
+local function on_construct(pos)
+    minetest.after(0.1, function() update_lamp_brightness(pos) end)  -- Delayed update
+end
+
+-- Register Lamp Nodes
+minetest.register_node("voltz:lamp_off", {
+    description = "Electric Lamp (Off)",
+    drawtype = "mesh",
+    mesh = "lamp.obj",
+    tiles = {"lamp_off.png"},
+    light_source = 0,
+    groups = {cracky = 2, oddly_breakable_by_hand = 1, energy_device = 1},
+    on_construct = on_construct
+})
+
+minetest.register_node("voltz:lamp_dim", {
+    description = "Electric Lamp (Dim)",
+    drawtype = "mesh",
+    mesh = "lamp.obj",
+    tiles = {"lamp_dim.png"},
+    light_source = 5,
+    groups = {cracky = 2, oddly_breakable_by_hand = 1, energy_device = 1},
+    on_construct = on_construct
+})
+
+minetest.register_node("voltz:lamp_bright", {
+    description = "Electric Lamp (Bright)",
+    drawtype = "mesh",
+    mesh = "lamp.obj",
+    tiles = {"lamp_bright.png"},
+    light_source = 14,
+    groups = {cracky = 2, oddly_breakable_by_hand = 1, energy_device = 1},
+    on_construct = on_construct
+})
+
+-- Ensure lamps update on power change
 minetest.register_abm({
     nodenames = {"voltz:lamp_off", "voltz:lamp_dim", "voltz:lamp_bright"},
-    interval = 1,  -- Check every second
-    chance = 1,  -- Always run
-
+    interval = 2,  -- Reduced update frequency
+    chance = 1,
     action = function(pos, node)
-        update_lamp_brightness(pos)
+        minetest.after(0.1, function() update_lamp_brightness(pos) end)  -- Add slight delay
     end
 })
 
--- Base Lamp Node (OFF)
-minetest.register_node("voltz:lamp_off", {
-    description = "Electric Lamp (Off)",
-    tiles = {"lamp_off.png"},
-    light_source = 0,  -- Default off
-    groups = {cracky = 2, oddly_breakable_by_hand = 1, energy_device = 1},  -- Works with power mods
+-- Ensure lamps update when a wire is placed nearby
+minetest.register_on_placenode(function(pos, newnode)
+    if minetest.get_item_group(newnode.name, "energy_cable") > 0 then
+        local directions = {
+            {x = 1, y = 0, z = 0}, {x = -1, y = 0, z = 0},
+            {x = 0, y = 0, z = 1}, {x = 0, y = 0, z = -1},
+            {x = 0, y = 1, z = 0}, {x = 0, y = -1, z = 0}
+        }
 
-    on_construct = function(pos)
-        local meta = minetest.get_meta(pos)
-        meta:set_int("power", 0)
-        update_lamp_brightness(pos)
-    end,
-})
-
--- Dim Lamp Node
-minetest.register_node("voltz:lamp_dim", {
-    description = "Electric Lamp (Dim)",
-    tiles = {"lamp_dim.png"},
-    light_source = 5,  -- Dim light
-    groups = {cracky = 2, oddly_breakable_by_hand = 1, energy_device = 1},
-
-    on_construct = function(pos)
-        local meta = minetest.get_meta(pos)
-        meta:set_int("power", 5)
-        update_lamp_brightness(pos)
-    end,
-})
-
--- Bright Lamp Node
-minetest.register_node("voltz:lamp_bright", {
-    description = "Electric Lamp (Bright)",
-    tiles = {"lamp_bright.png"},
-    light_source = 14,  -- Maximum brightness
-    groups = {cracky = 2, oddly_breakable_by_hand = 1, energy_device = 1},
-
-    on_construct = function(pos)
-        local meta = minetest.get_meta(pos)
-        meta:set_int("power", 14)
-        update_lamp_brightness(pos)
-    end,
-})
+        for _, dir in ipairs(directions) do
+            local neighbor_pos = vector.add(pos, dir)
+            local neighbor_node = minetest.get_node(neighbor_pos).name
+            if minetest.get_item_group(neighbor_node, "energy_device") > 0 then
+                minetest.after(0.1, function() update_lamp_brightness(neighbor_pos) end)
+            end
+        end
+    end
+end)
