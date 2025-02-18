@@ -1,6 +1,8 @@
-core.register_craftitem("voltz:furnace", {
-    description = "My Special Item",
-    inventory_image = "furnace.png"
+-- Register electric furnace as a Craft Item
+minetest.register_craftitem("voltz:furnace", {
+    description = "Electric Furnace",
+    inventory_image = "furnace.png",
+    groups = {electric_furnace = 1}  -- Ensures it appears in searches and works universally
 })
 -- Function to update furnace smelting speed
 local function update_furnace_speed(pos, power)
@@ -10,7 +12,7 @@ local function update_furnace_speed(pos, power)
 end
 
 -- Electric Furnace Node
-core.register_node("voltz:electric_furnace", {
+minetest.register_node("voltz:electric_furnace", {
     description = "Electric Furnace",
     tiles = {"electric_furnace.png"},
     groups = {cracky=3, stone=1},
@@ -94,7 +96,7 @@ function get_furnace_formspec(pos)
 end
 
 -- Electric Furnace Node
-core.register_node("voltz:electric_furnace", {
+minetest.register_node("voltz:electric_furnace", {
     description = "Electric Furnace",
     tiles = {"electric_furnace.png"},
     groups = {cracky=3, stone=1},
@@ -167,7 +169,7 @@ minetest.register_on_player_receive_fields(function(player, formname, fields)
 end)
 
 -- Electric Furnace Node (Fixed formspec access)
-core.register_node("voltz:electric_furnace", {
+minetest.register_node("voltz:electric_furnace", {
     description = "Electric Furnace",
     tiles = {"electric_furnace.png"},
     groups = {cracky=3, stone=1},
